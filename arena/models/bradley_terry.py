@@ -136,56 +136,44 @@ class BradleyTerry(RatingSystem):
         if not self.fitted:
             self.fit(dataset)
 
-        ratings_raw = self.params["ratings"]
+        ratings = self.params["ratings"]
         total_battles = jnp.sum(dataset.counts)
 
-        # --- FIX START ---
-        # 1. Detect Unweighted mode: If weights are all 1.0, we are unweighted.
-        # The reference implementation implicitly scales regularization by Total Battles in this mode.
         is_unweighted = jnp.allclose(dataset.weights, 1.0)
         reg_factor = jnp.where(is_unweighted, total_battles, 1.0)
         effective_reg = self.hessian_reg * reg_factor
 
         # 2. Compute Statistics with effective regularization
-        H, G = _compute_clt_stats(
-            ratings_raw,
+        hessian, gradient_cov = _compute_clt_stats(
+            ratings,
             dataset.pairs,
             dataset.outcomes,
             dataset.counts,
             dataset.opt_weights,
-            effective_reg,  # Pass the scaled regularization here
+            effective_reg,
             self.n_competitors,
         )
 
-        # 3. Invert Hessian and compute Sandwich Estimator
-        # H and G are Sum-Scaled (O(N)), so Sigma is naturally O(1/N).
-        H_inv = jnp.linalg.inv(H)
-        Sigma = H_inv @ G @ H_inv
+        hessian_inv = jnp.linalg.inv(hessian)
 
-        # Do NOT divide by total_battles here.
-        variance = jnp.diag(Sigma)
-        # --- FIX END ---
+        # This is the full Covariance Matrix (Sigma), not the variance vector
+        covariance_matrix = hessian_inv @ gradient_cov @ hessian_inv
+
+        # This is the actual variance vector
+        variance = jnp.diag(covariance_matrix)
 
         std_errs = jnp.sqrt(variance)
-
-        # 4. Compute CI widths (Z-score)
         z_score = jax.scipy.stats.norm.ppf(1 - significance_level / 2)
         interval_widths = z_score * std_errs
 
-        # 5. Anchor and Scale Ratings
-        ratings_np = jax.device_get(ratings_raw)
-        widths_np = jax.device_get(interval_widths)
-        variance_np = jax.device_get(variance)
-
-        # Handle Anchoring (shift so anchor model is at 0.0 before scaling)
         offset = self.init_rating
+        scaled_ratings = ratings * self.alpha + offset
+        scaled_widths = interval_widths * self.alpha
+        scaled_variance = variance * (self.alpha**2)
 
-        # Apply Elo Scaling: rating = raw * alpha + offset
-        scaled_ratings = ratings_np * self.alpha + offset
-
-        # Apply scaling to intervals (linear scaling)
-        scaled_widths = widths_np * self.alpha
-        scaled_variance = variance_np * (self.alpha**2)
+        print(f"{scaled_ratings.shape=}")
+        print(f"{scaled_widths.shape=}")
+        print(f"{scaled_variance.shape=}")
 
         return {
             "models": dataset.competitors,

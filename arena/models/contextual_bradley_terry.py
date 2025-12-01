@@ -118,13 +118,10 @@ def _compute_contextual_clt_stats(
         ]
     )
 
-    # -- Correction for Regularization in Variance --
-    # Original: var_grad -= (self.reg ** 2 / n_obs) * np.outer(padded_features, padded_features)
-    # This corresponds to the variance reduction due to the fixed point of the regularizer
+    # correct for L2 regularization in gradient covariance
     params_vec = jnp.concatenate([jnp.zeros(n_competitors), coeffs])
     reg_correction = (reg**2 / n_obs) * jnp.outer(params_vec, params_vec)
     grad_cov = grad_cov - reg_correction
-
     return hessian, grad_cov
 
 
@@ -182,7 +179,6 @@ class ContextualBradleyTerry(RatingSystem):
         """
 
         features = dataset.features
-        # 3. Setup Data Dictionary
         initial_params = self.params
         data = {
             "pairs": dataset.pairs,
@@ -234,22 +230,22 @@ class ContextualBradleyTerry(RatingSystem):
             n_obs,
         )
 
-        # 2. Compute Sandwich Estimator: Sigma = hessian^-1 @ gradient_cov @ hessian^-1
+        # 2. Compute Sandwich Estimator: robust_cov = hessian^-1 @ gradient_cov @ hessian^-1
         # hessian and gradient_cov are already normalized by n_obs in the helper function
-        # Sigma = (hessian/n)^-1 @ (gradient_cov/n) @ (hessian/n)^-1  ?
+        # robust_cov = (hessian/n)^-1 @ (gradient_cov/n) @ (hessian/n)^-1  ?
         # Wait, strictly following original logic:
         # original Variance = diag(Inv(hessian) @ gradient_cov @ Inv(hessian)) / n_obs.
         # Our _compute helper returns hessian and gradient_cov normalized by n_obs (matching original).
-        # So Sigma_calc = Inv(hessian_norm) @ gradient_cov_norm @ Inv(hessian_norm)
+        # So robust_cov_calc = Inv(hessian_norm) @ gradient_cov_norm @ Inv(hessian_norm)
         # This results in a value scaled by N.
         # (1/N)^-1 * (1/N) * (1/N)^-1 = N.
         # So we divide by N at the end to get Variance.
 
         hessian_inv = jnp.linalg.inv(hessian)
-        Sigma = hessian_inv @ gradient_cov @ hessian_inv
+        asymptotic_variance = hessian_inv @ gradient_cov @ hessian_inv
 
         # Variance of the parameters
-        param_variance = jnp.diag(Sigma) / n_obs
+        param_variance = jnp.diag(asymptotic_variance) / n_obs
         std_errs = jnp.sqrt(param_variance)
 
         # Extract specific variance components
