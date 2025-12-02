@@ -36,7 +36,7 @@ def loss_function(params, data: PyTree) -> jnp.ndarray:
 
 
 @partial(jit, static_argnames=["n_competitors"])
-def _compute_clt_stats(
+def compute_hessian_and_covariance(
     ratings: jnp.ndarray,
     matchups: jnp.ndarray,
     outcomes: jnp.ndarray,
@@ -89,7 +89,6 @@ class BradleyTerry(RatingSystem):
         max_iter=1000,
         tol=1e-6,
         dtype=jnp.float64,
-        # Scaling/output parameters
         scale: float = 400.0,
         base: float = 10.0,
         init_rating: float = 1000.0,
@@ -99,15 +98,13 @@ class BradleyTerry(RatingSystem):
         self.max_iter = max_iter
         self.tol = tol
         self.dtype = dtype
-        self.params = {"ratings": jnp.zeros(n_competitors, dtype=dtype)}
-        self.fitted = False
-
-        # Formatting/Scaling configs
         self.scale = scale
         self.base = base
-        self.alpha = scale / math.log(base)
         self.init_rating = init_rating
         self.hessian_reg = hessian_reg
+        self.alpha = scale / math.log(base)
+        self.params = {"ratings": jnp.zeros(n_competitors, dtype=dtype)}
+        self.fitted = False
 
     def fit(self, dataset: PairDataset):
         """Fit the Bradley-Terry model to the provided dataset."""
@@ -130,9 +127,8 @@ class BradleyTerry(RatingSystem):
 
     def compute_ratings_and_cis(self, dataset: PairDataset, significance_level: float = 0.05):
         """
-        Fits the model (if needed), calculates CLT-based confidence intervals
+        Fits the model (if needed), calculates confidence intervals
         """
-        # 1. Fit if not already fitted
         if not self.fitted:
             self.fit(dataset)
 
@@ -143,8 +139,7 @@ class BradleyTerry(RatingSystem):
         reg_factor = jnp.where(is_unweighted, total_battles, 1.0)
         effective_reg = self.hessian_reg * reg_factor
 
-        # 2. Compute Statistics with effective regularization
-        hessian, gradient_cov = _compute_clt_stats(
+        hessian, gradient_cov = compute_hessian_and_covariance(
             ratings,
             dataset.pairs,
             dataset.outcomes,
@@ -155,30 +150,22 @@ class BradleyTerry(RatingSystem):
         )
 
         hessian_inv = jnp.linalg.inv(hessian)
-
-        # This is the full Covariance Matrix (Sigma), not the variance vector
         covariance_matrix = hessian_inv @ gradient_cov @ hessian_inv
+        variances = jnp.diag(covariance_matrix)
 
-        # This is the actual variance vector
-        variance = jnp.diag(covariance_matrix)
-
-        std_errs = jnp.sqrt(variance)
+        std_errs = jnp.sqrt(variances)
         z_score = jax.scipy.stats.norm.ppf(1 - significance_level / 2)
         interval_widths = z_score * std_errs
 
         offset = self.init_rating
         scaled_ratings = ratings * self.alpha + offset
         scaled_widths = interval_widths * self.alpha
-        scaled_variance = variance * (self.alpha**2)
-
-        print(f"{scaled_ratings.shape=}")
-        print(f"{scaled_widths.shape=}")
-        print(f"{scaled_variance.shape=}")
+        scaled_variances = variances * (self.alpha**2)
 
         return {
-            "models": dataset.competitors,
+            "competitors": dataset.competitors,
             "ratings": scaled_ratings,
             "rating_lower": scaled_ratings - scaled_widths,
             "rating_upper": scaled_ratings + scaled_widths,
-            "variance": scaled_variance,
+            "variances": scaled_variances,
         }

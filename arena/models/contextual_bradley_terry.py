@@ -41,7 +41,7 @@ def loss_function(params: PyTree, data: PyTree, reg: float, clip=1e-15) -> jnp.n
 
 
 @partial(jit, static_argnames=["n_obs", "n_competitors", "n_features"])
-def _compute_contextual_clt_stats(
+def compute_hessian_and_covvariance(
     ratings: jnp.ndarray,
     coeffs: jnp.ndarray,
     matchups: jnp.ndarray,
@@ -127,21 +127,17 @@ def _compute_contextual_clt_stats(
 
 class ContextualBradleyTerry(RatingSystem):
     """
-    Bradley-Terry rating system with contextual features (Side Information).
-
-    Models P(i > j) = sigmoid(lambda_i - lambda_j + beta^T x_ij)
+    Bradley-Terry rating system with contextual features.
     """
 
     def __init__(
         self,
         n_competitors: int,
         n_features: int,
-        # Optimization params
         reg: float = 1.0,
         max_iter: int = 1000,
         tol: float = 1e-6,
         dtype=jnp.float64,
-        # Scaling/output parameters
         scale: float = 400.0,
         base: float = 10.0,
         init_rating: float = 1000.0,
@@ -155,20 +151,16 @@ class ContextualBradleyTerry(RatingSystem):
         self.tol = tol
         self.clip = clip
         self.dtype = dtype
-
-        # Initialize parameters as a PyTree
+        self.scale = scale
+        self.base = base
+        self.init_rating = init_rating
+        self.hessian_reg = hessian_reg
+        self.fitted = False
+        self.alpha = scale / math.log(base)
         self.params = {
             "ratings": jnp.zeros(n_competitors, dtype=dtype),
             "coeffs": jnp.zeros(n_features, dtype=dtype),
         }
-        self.fitted = False
-
-        # Formatting/Scaling configs
-        self.scale = scale
-        self.base = base
-        self.alpha = scale / math.log(base)
-        self.init_rating = init_rating
-        self.hessian_reg = hessian_reg
 
     def fit(self, dataset: ContextualPairDataset):
         """
@@ -177,7 +169,6 @@ class ContextualBradleyTerry(RatingSystem):
         Args:
             dataset: ContextualPairDataset containing matchups, outcomes, features.
         """
-
         features = dataset.features
         initial_params = self.params
         data = {
@@ -187,9 +178,7 @@ class ContextualBradleyTerry(RatingSystem):
             "features": features,
         }
 
-        # 4. Partial Loss & Optimize
         loss_fn = partial(loss_function, reg=self.reg, data=data, clip=self.clip)
-
         optimized_params, _ = self.lbfgs_minimize(
             loss_function=loss_fn,
             initial_params=initial_params,
@@ -215,8 +204,7 @@ class ContextualBradleyTerry(RatingSystem):
         coeffs = self.params["coeffs"]
         n_obs = dataset.pairs.shape[0]
 
-        # 1. Compute CLT Statistics (Sandwich Estimator components)
-        hessian, gradient_cov = _compute_contextual_clt_stats(
+        hessian, gradient_cov = compute_hessian_and_covvariance(
             ratings,
             coeffs,
             dataset.pairs,
@@ -229,46 +217,27 @@ class ContextualBradleyTerry(RatingSystem):
             self.n_features,
             n_obs,
         )
-
-        # 2. Compute Sandwich Estimator: robust_cov = hessian^-1 @ gradient_cov @ hessian^-1
-        # hessian and gradient_cov are already normalized by n_obs in the helper function
-        # robust_cov = (hessian/n)^-1 @ (gradient_cov/n) @ (hessian/n)^-1  ?
-        # Wait, strictly following original logic:
-        # original Variance = diag(Inv(hessian) @ gradient_cov @ Inv(hessian)) / n_obs.
-        # Our _compute helper returns hessian and gradient_cov normalized by n_obs (matching original).
-        # So robust_cov_calc = Inv(hessian_norm) @ gradient_cov_norm @ Inv(hessian_norm)
-        # This results in a value scaled by N.
-        # (1/N)^-1 * (1/N) * (1/N)^-1 = N.
-        # So we divide by N at the end to get Variance.
-
         hessian_inv = jnp.linalg.inv(hessian)
         asymptotic_variance = hessian_inv @ gradient_cov @ hessian_inv
 
-        # Variance of the parameters
-        param_variance = jnp.diag(asymptotic_variance) / n_obs
-        std_errs = jnp.sqrt(param_variance)
+        param_variances = jnp.diag(asymptotic_variance) / n_obs
+        std_errs = jnp.sqrt(param_variances)
 
-        # Extract specific variance components
-        rating_variance = param_variance[: self.n_competitors]
+        rating_variances = param_variances[: self.n_competitors]
         rating_std_errs = std_errs[: self.n_competitors]
-
-        # 3. Compute CI widths (Z-score) for Ratings
         z_score = jax.scipy.stats.norm.ppf(1 - significance_level / 2)
         interval_widths = z_score * rating_std_errs
 
-        # Anchor offset (shift init_rating)
         offset = self.init_rating
-
-        # Elo Scale
         scaled_ratings = ratings * self.alpha + offset
         scaled_widths = interval_widths * self.alpha
-        scaled_variance = rating_variance * (self.alpha**2)
+        scaled_variances = rating_variances * (self.alpha**2)
 
         return {
-            "models": dataset.competitors,
+            "competitors": dataset.competitors,
             "ratings": scaled_ratings,
             "coeffs": coeffs,
             "rating_lower": scaled_ratings - scaled_widths,
             "rating_upper": scaled_ratings + scaled_widths,
-            "variance": scaled_variance,
+            "variances": scaled_variances,
         }
