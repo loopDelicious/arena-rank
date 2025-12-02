@@ -37,7 +37,11 @@ dev = [
 
 examples = [
     "datasets",
+    "kagglehub",
     "matplotlib",
+    "seaborn",
+    "notebook",
+    "ipywidgets",
 ]
 
 [project.urls]
