@@ -62,7 +62,7 @@ def plot_leaderboard(
     plot_df = leaderboard_df.head(top_n)
     plt.figure(figsize=(14, 8))
     plt.errorbar(
-        x=plot_df["Model"],
+        x=plot_df[item_name],
         y=plot_df["Rating"],
         yerr=[plot_df["error_lower"], plot_df["error_upper"]],
         fmt="o",
