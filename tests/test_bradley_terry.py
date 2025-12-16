@@ -1,5 +1,6 @@
 import random
 import numpy as np
+from scipy.special import expit
 import pandas as pd
 from arena.models.bradley_terry import BradleyTerry
 from arena.models.contextual_bradley_terry import ContextualBradleyTerry
@@ -128,3 +129,65 @@ def test_contextual_bradley():
     assert "coeffs" in result
     assert len(result["ratings"]) == n_competitors
     assert len(result["coeffs"]) == n_features
+
+
+def test_ci_methods_comparison():
+    """
+    Compares confidence intervals calculated via the sandwich analytical method
+    (Hessian-based) vs. the bootstrap method on a synthetic dataset.
+    """
+    np.random.seed(42)
+    n_competitors = 4
+    n_games = 10000
+
+    true_ratings = np.linspace(0.0, 1.0, n_competitors)
+    comp_names = np.arange(n_competitors).astype(str)
+
+    # sample indices for Team A
+    idxs_a = np.random.randint(0, n_competitors, size=n_games)
+    # generate offsets to ensure distinct Team B (no self-play)
+    offsets = np.random.randint(1, n_competitors, size=n_games)
+    idxs_b = (idxs_a + offsets) % n_competitors
+
+    r_a = true_ratings[idxs_a]
+    r_b = true_ratings[idxs_b]
+    probs_a = expit(r_a - r_b)
+    a_wins_mask = np.random.binomial(1, probs_a).astype(bool)
+
+    df = pd.DataFrame(
+        {
+            "team_1": comp_names[idxs_a],
+            "team_2": comp_names[idxs_b],
+            "winner": np.where(a_wins_mask, "team_1", "team_2"),
+        }
+    )
+
+    dataset = PairDataset.from_pandas(
+        df, competitor_cols=["team_1", "team_2"], outcome_map={"team_1": 1.0, "team_2": 0.0}, reweighted=False
+    )
+    model = BradleyTerry(
+        n_competitors=len(dataset.competitors),
+        scale=1.0,
+        base=np.e,
+        init_rating=0.0,
+    )
+
+    # compute CIs using sandwich estimator
+    results_sandwich = model.compute_ratings_and_cis(dataset, significance_level=0.05, ci_method="sandwich")
+    # compute CIs using botstrap
+    results_bootstrap = model.compute_ratings_and_cis(
+        dataset, significance_level=0.05, ci_method="bootstrap", num_bootstrap=200
+    )
+
+    np.testing.assert_allclose(
+        results_sandwich["rating_lower"],
+        results_bootstrap["rating_lower"],
+        rtol=0.1,
+        err_msg="Lower bounds diverge between Hessian and Bootstrap methods",
+    )
+    np.testing.assert_allclose(
+        results_sandwich["rating_upper"],
+        results_bootstrap["rating_upper"],
+        rtol=0.1,
+        err_msg="Upper bounds diverge between Hessian and Bootstrap methods",
+    )

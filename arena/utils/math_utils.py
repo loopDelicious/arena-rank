@@ -89,7 +89,7 @@ def lbfgs_minimize(
     final_params, final_state, _, final_grad_norm, final_rel_change = _run_optimization(initial_params)
 
     # needed for accurate speed benchmarks
-    final_params = jax.tree.map(lambda x: x.block_until_ready(), final_params)
+    # final_params = jax.tree.map(lambda x: x.block_until_ready(), final_params)
 
     final_iter = optax.tree_utils.tree_get(final_state, "count", 0)
     final_loss = optax.tree_utils.tree_get(final_state, "value", jnp.inf)

@@ -45,26 +45,42 @@ def add_style_feature_cols(df, feature_names):
 
 
 def plot_leaderboard(
-    results, competitors, top_n=20, item_name="Model", rating_name="Arena Score", title="Style-Control Leaderboard"
+    results,
+    top_n=20,
+    item_name="Model",
+    rating_name="Arena Score",
+    title="Style-Control Leaderboard",
+    label=None,
+    results_v2=None,
+    label_v2="Secondary",
 ):
-    ""
+    """
+    Plots the leaderboard. If results_v2 is provided, it plots a comparison
+    with the second set of results in orange.
+    """
+    # 1. Prepare Primary Data
     leaderboard_df = pd.DataFrame(
         {
-            item_name: competitors,
+            item_name: results["competitors"],
             "Rating": results["ratings"],
             "Lower": results["rating_lower"],
             "Upper": results["rating_upper"],
         }
     )
 
-    # sort by rating
+    # Sort by rating (Primary)
     leaderboard_df = leaderboard_df.sort_values(by="Rating", ascending=False).reset_index(drop=True)
 
-    # calculate error bar sizes
+    # Calculate error bars (Primary)
     leaderboard_df["error_lower"] = leaderboard_df["Rating"] - leaderboard_df["Lower"]
     leaderboard_df["error_upper"] = leaderboard_df["Upper"] - leaderboard_df["Rating"]
+
+    # Slice top_n
     plot_df = leaderboard_df.head(top_n)
+
     plt.figure(figsize=(14, 8))
+
+    # 2. Plot Primary (Blue)
     plt.errorbar(
         x=plot_df[item_name],
         y=plot_df["Rating"],
@@ -74,7 +90,46 @@ def plot_leaderboard(
         ecolor="gray",
         capsize=3,
         markersize=6,
+        label=label,
     )
+
+    # 3. Handle Optional Secondary Data
+    if results_v2 is not None:
+        # Create dataframe for secondary results
+        df2 = pd.DataFrame(
+            {
+                item_name: results_v2["competitors"],
+                "Rating": results_v2["ratings"],
+                "Lower": results_v2["rating_lower"],
+                "Upper": results_v2["rating_upper"],
+            }
+        )
+
+        # Calculate error bars (Secondary)
+        df2["error_lower"] = df2["Rating"] - df2["Lower"]
+        df2["error_upper"] = df2["Upper"] - df2["Rating"]
+
+        # CRITICAL: Align df2 to match the order and selection of plot_df (the top N from main)
+        # We merge plot_df's names with df2 to ensure correct X-axis alignment
+        plot_df_v2 = plot_df[[item_name]].merge(df2, on=item_name, how="left")
+
+        # Plot Secondary (Orange)
+        plt.errorbar(
+            x=plot_df_v2[item_name],
+            y=plot_df_v2["Rating"],
+            yerr=[plot_df_v2["error_lower"], plot_df_v2["error_upper"]],
+            fmt="o",
+            color="orange",
+            ecolor="bisque",  # Lighter orange for error bars
+            capsize=3,
+            markersize=6,
+            label=label_v2,
+        )
+
+        # Enable legend if we have two plots
+        plt.legend(fontsize=12)
+
+    # 4. Final Formatting
     plt.title(f"{title} (Top {top_n})", fontsize=16)
     plt.ylabel(rating_name, fontsize=12)
     plt.xlabel(f"{item_name} Name", fontsize=12)

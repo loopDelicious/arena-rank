@@ -2,11 +2,13 @@
 
 from functools import partial
 import math
-from typing import Tuple
+from copy import deepcopy
+import multiprocessing as mp
+from typing import Tuple, Dict, Any
 import jax
 import jax.nn as nn
 import jax.numpy as jnp
-from jax import jit
+from jax import jit, tree_util
 from jaxtyping import PyTree
 
 from arena.models.rating_system import RatingSystem
@@ -14,6 +16,32 @@ from arena.utils.data_utils import PairDataset
 from arena.utils.math_utils import assemble_parwise_matrix
 
 jax.config.update("jax_enable_x64", True)
+
+
+# needs to be at the top level to be pickle-able for multiprocessing
+def fit_single_bootstrap_sample(
+    boot_counts: jnp.ndarray,
+    model: RatingSystem,
+    dataset: PairDataset,
+) -> PyTree:
+    """Helper function to fit a single bootstrap sample with given counts."""
+    # opt_weights = counts * weights (combining occurrence counts and reweighting)
+    boot_opt_weights = boot_counts * dataset.weights
+
+    # Create bootstrap dataset with resampled counts
+    boot_dataset = PairDataset(
+        competitors=dataset.competitors,
+        pairs=dataset.pairs,
+        outcomes=dataset.outcomes,
+        counts=boot_counts,
+        weights=dataset.weights,
+        opt_weights=boot_opt_weights,  # same dataset but with weights based on the bootstrap counts
+    )
+
+    boot_model = deepcopy(model)
+    boot_model.params = {"ratings": jnp.zeros_like(boot_model.params["ratings"], dtype=model.dtype)}
+    boot_model.fit(boot_dataset)
+    return boot_model.params
 
 
 class BradleyTerry(RatingSystem):
@@ -102,47 +130,103 @@ class BradleyTerry(RatingSystem):
         hessian = hessian + (jnp.eye(n_competitors) * hessian_reg)
         return hessian, grad_cov
 
-    def compute_ratings_and_cis(self, dataset: PairDataset, significance_level: float = 0.05):
+    def compute_ratings_and_cis(
+        self,
+        dataset: PairDataset,
+        significance_level: float = 0.05,
+        ci_method: str = "sandwich",
+        num_bootstrap: int = 100,
+        seed: int = 42,
+        n_jobs: int = -1,
+    ) -> Dict[str, Any]:
         """
-        Fits the model (if needed), calculates confidence intervals
+        Fits the model (if needed), calculates confidence intervals.
+
+        Args:
+            dataset: PairDataset containing the matchup data.
+            significance_level: Significance level for confidence intervals.
+            ci_method: "sandwich" for asymptotic estimates or "bootstrap" for resampling.
+            num_bootstrap: Number of bootstrap samples (only used if ci_method="bootstrap").
+            seed: Random seed for bootstrapping.
+            n_jobs: Number of workers for multiprocessing (only used if ci_method="bootstrap").
         """
         if not self.fitted:
             self.fit(dataset)
 
-        ratings = self.params["ratings"]
-        total_battles = jnp.sum(dataset.counts)
+        ratings = self.params["ratings"]  # unscaled ratings from the fitted model
 
-        is_unweighted = jnp.allclose(dataset.weights, 1.0)
-        reg_factor = jnp.where(is_unweighted, total_battles, 1.0)
-        effective_reg = self.hessian_reg * reg_factor
-
-        hessian, gradient_cov = self.compute_hessian_and_covariance(
-            ratings,
-            dataset.pairs,
-            dataset.outcomes,
-            dataset.counts,
-            dataset.opt_weights,
-            effective_reg,
-            self.n_competitors,
-        )
-
-        hessian_inv = jnp.linalg.inv(hessian)
-        covariance_matrix = hessian_inv @ gradient_cov @ hessian_inv
-        variances = jnp.diag(covariance_matrix)
-
-        std_errs = jnp.sqrt(variances)
-        z_score = jax.scipy.stats.norm.ppf(1 - significance_level / 2)
-        interval_widths = z_score * std_errs
-
+        alpha = self.alpha
         offset = self.init_rating
-        scaled_ratings = ratings * self.alpha + offset
-        scaled_widths = interval_widths * self.alpha
-        scaled_variances = variances * (self.alpha**2)
+
+        def scale(x):
+            return x * alpha + offset
+
+        scaled_ratings = scale(ratings)
+        rating_lower = None
+        rating_upper = None
+        scaled_variances = None
+
+        total_battles = jnp.sum(dataset.counts)
+        if ci_method == "sandwich":
+            is_unweighted = jnp.allclose(dataset.weights, 1.0)
+            reg_factor = jnp.where(is_unweighted, total_battles, 1.0)
+            effective_reg = self.hessian_reg * reg_factor
+
+            hessian, gradient_cov = self.compute_hessian_and_covariance(
+                ratings,
+                dataset.pairs,
+                dataset.outcomes,
+                dataset.counts,
+                dataset.opt_weights,
+                effective_reg,
+                self.n_competitors,
+            )
+
+            hessian_inv = jnp.linalg.inv(hessian)
+            covariance_matrix = hessian_inv @ gradient_cov @ hessian_inv
+            variances = jnp.diag(covariance_matrix)
+
+            std_errs = jnp.sqrt(variances)
+            z_score = jax.scipy.stats.norm.ppf(1 - significance_level / 2)
+            interval_widths = z_score * std_errs
+
+            rating_lower = scale(ratings - interval_widths)
+            rating_upper = scale(ratings + interval_widths)
+            scaled_variances = variances * (alpha**2)
+
+        elif ci_method == "bootstrap":
+            # generate all bootstrap count samples using multinomial distribution
+            key = jax.random.PRNGKey(seed)
+            boot_counts_all = jax.random.multinomial(
+                key=key,
+                n=int(total_battles),
+                p=dataset.counts / total_battles,
+                shape=(num_bootstrap, dataset.counts.shape[0]),
+                dtype=self.dtype,
+            )
+
+            # prepare arguments for multiprocessing
+            worker_args = [(boot_counts_all[i], self, dataset) for i in range(num_bootstrap)]
+            n_jobs = mp.cpu_count() if n_jobs == -1 else n_jobs
+
+            with mp.Pool(processes=n_jobs) as pool:
+                results = pool.starmap(fit_single_bootstrap_sample, worker_args)
+
+            bootstrap_params = tree_util.tree_map(lambda *args: jnp.stack(args), *results)
+            bootstrap_ratings = bootstrap_params["ratings"]  # [B, n_competitors] unscaled
+            scaled_samples = scale(bootstrap_ratings)
+
+            rating_lower = jnp.quantile(scaled_samples, significance_level / 2.0, axis=0)
+            rating_upper = jnp.quantile(scaled_samples, 1.0 - significance_level / 2.0, axis=0)
+            scaled_variances = jnp.var(scaled_samples, axis=0)
+
+        else:
+            raise ValueError(f"Unknown ci_method: {ci_method}")
 
         return {
             "competitors": dataset.competitors,
             "ratings": scaled_ratings,
-            "rating_lower": scaled_ratings - scaled_widths,
-            "rating_upper": scaled_ratings + scaled_widths,
+            "rating_lower": rating_lower,
+            "rating_upper": rating_upper,
             "variances": scaled_variances,
         }

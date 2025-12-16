@@ -2,11 +2,13 @@
 
 from functools import partial
 import math
+from copy import deepcopy
+import multiprocessing as mp
 from typing import Tuple, Dict, Any
 import jax
 import jax.nn as nn
 import jax.numpy as jnp
-from jax import jit
+from jax import jit, tree_util
 from jaxtyping import PyTree
 
 from arena.models.rating_system import RatingSystem
@@ -14,6 +16,33 @@ from arena.utils.data_utils import ContextualPairDataset
 from arena.utils.math_utils import assemble_parwise_matrix
 
 jax.config.update("jax_enable_x64", True)
+
+
+# needs to be at the top level to be pickle-able for multiprocessing
+def fit_single_bootstrap_sample(
+    key: jnp.ndarray,
+    model: RatingSystem,
+    dataset: ContextualPairDataset,
+) -> PyTree:
+    """Helper function to fit a single bootstrap sample."""
+    n_obs = dataset.pairs.shape[0]
+    idxs = jax.random.randint(key, shape=(n_obs,), minval=0, maxval=n_obs)
+
+    boot_dataset = ContextualPairDataset(
+        competitors=dataset.competitors,
+        pairs=dataset.pairs[idxs],
+        outcomes=dataset.outcomes[idxs],
+        features=dataset.features[idxs],
+        weights=dataset.weights[idxs],
+    )
+
+    boot_model = deepcopy(model)
+    boot_model.params = {
+        "ratings": jnp.zeros_like(boot_model.params["ratings"], dtype=model.dtype),
+        "coeffs": jnp.zeros_like(boot_model.params["coeffs"], dtype=model.dtype),
+    }
+    boot_model.fit(boot_dataset)
+    return boot_model.params
 
 
 class ContextualBradleyTerry(RatingSystem):
@@ -93,23 +122,6 @@ class ContextualBradleyTerry(RatingSystem):
         """
         Computes the Hessian and Gradient Covariance matrices for the
         sandwich estimator within the Contextual Bradley-Terry framework.
-
-        Constructs the block matrix:
-        [ hessian_ratings   hessian_cross ]
-        [ hessian_cross.T   hessian_feats ]
-
-        Args:
-            ratings: Competitor ratings, shape (n_competitors,)
-            coeffs: Contextual feature coefficients, shape (n_features,)
-            matchups: Matchup pairs, shape (n_pairs, 2)
-            features: Contextual features, shape (n_pairs, n_features)
-            outcomes: Matchup outcomes, shape (n_pairs,)
-            weights: Observation weights, shape (n_pairs,)
-            reg: L2 regularization strength for feature coefficients
-            hessian_reg: Diagonal regularization for Hessian
-            n_competitors: Number of competitors
-            n_features: Number of contextual features
-            n_obs: Number of observations
         """
         matchup_ratings = ratings[matchups]
         bt_logits = matchup_ratings[:, 0] - matchup_ratings[:, 1]
@@ -174,53 +186,99 @@ class ContextualBradleyTerry(RatingSystem):
         return hessian, grad_cov
 
     def compute_ratings_and_cis(
-        self, dataset: ContextualPairDataset, significance_level: float = 0.05
+        self,
+        dataset: ContextualPairDataset,
+        significance_level: float = 0.05,
+        ci_method: str = "sandwich",
+        num_bootstrap: int = 100,
+        seed: int = 42,
+        n_jobs: int = -1,
     ) -> Dict[str, Any]:
         """
-        Calculates ratings, coefficients, and CLT-based confidence intervals.
+        Calculates ratings, coefficients, and confidence intervals.
+
+        Args:
+            ci_method: "sandwich" for asymptotic estimates or "bootstrap" for resampling.
+            num_bootstrap: Number of bootstrap samples (only used if ci_method="bootstrap").
+            seed: Random seed for bootstrapping.
+            n_jobs: Number of workers for multiprocessing (only used if ci_method="bootstrap").
         """
         if not self.fitted:
             self.fit(dataset)
 
-        features = dataset.features
-        ratings = self.params["ratings"]
+        ratings = self.params["ratings"]  # unscaled ratings from the fitted model
         coeffs = self.params["coeffs"]
-        n_obs = dataset.pairs.shape[0]
 
-        hessian, gradient_cov = self.compute_hessian_and_covariance(
-            ratings,
-            coeffs,
-            dataset.pairs,
-            features,
-            dataset.outcomes,
-            dataset.weights,
-            self.reg,
-            self.hessian_reg,
-            self.n_competitors,
-            self.n_features,
-            n_obs,
-        )
-        hessian_inv = jnp.linalg.inv(hessian)
-        asymptotic_variance = hessian_inv @ gradient_cov @ hessian_inv
-
-        param_variances = jnp.diag(asymptotic_variance) / n_obs
-        std_errs = jnp.sqrt(param_variances)
-
-        rating_variances = param_variances[: self.n_competitors]
-        rating_std_errs = std_errs[: self.n_competitors]
-        z_score = jax.scipy.stats.norm.ppf(1 - significance_level / 2)
-        interval_widths = z_score * rating_std_errs
-
+        alpha = self.alpha
         offset = self.init_rating
-        scaled_ratings = ratings * self.alpha + offset
-        scaled_widths = interval_widths * self.alpha
-        scaled_variances = rating_variances * (self.alpha**2)
+
+        def scale(x):
+            return x * alpha + offset
+
+        scaled_ratings = scale(ratings)
+        rating_lower = None
+        rating_upper = None
+        scaled_variances = None
+
+        if ci_method == "sandwich":
+            features = dataset.features
+            n_obs = dataset.pairs.shape[0]
+
+            hessian, gradient_cov = self.compute_hessian_and_covariance(
+                ratings,
+                coeffs,
+                dataset.pairs,
+                features,
+                dataset.outcomes,
+                dataset.weights,
+                self.reg,
+                self.hessian_reg,
+                self.n_competitors,
+                self.n_features,
+                n_obs,
+            )
+
+            hessian_inv = jnp.linalg.inv(hessian)
+            asymptotic_variance = hessian_inv @ gradient_cov @ hessian_inv
+            param_variances = jnp.diag(asymptotic_variance) / n_obs
+            rating_variances = param_variances[: self.n_competitors]
+
+            std_errs = jnp.sqrt(rating_variances)
+            z = jax.scipy.stats.norm.ppf(1.0 - significance_level / 2.0)
+            widths = z * std_errs  # in *unscaled* rating units
+
+            rating_lower = scale(ratings - widths)
+            rating_upper = scale(ratings + widths)
+            scaled_variances = rating_variances * (alpha**2)
+
+        elif ci_method == "bootstrap":
+            master_key = jax.random.PRNGKey(seed)
+            keys = jax.random.split(master_key, num_bootstrap)
+            worker_args = [(keys[i], self, dataset) for i in range(num_bootstrap)]
+            n_jobs = mp.cpu_count() if n_jobs == -1 else n_jobs
+
+            # ctx = mp.get_context("spawn")
+            # with ctx.Pool(processes=n_jobs) as pool:
+            #     results = pool.starmap(fit_single_bootstrap_sample, worker_args)
+            with mp.Pool(processes=n_jobs) as pool:
+                results = pool.starmap(fit_single_bootstrap_sample, worker_args)
+
+            bootstrap_params = tree_util.tree_map(lambda *args: jnp.stack(args), *results)
+            bootstrap_ratings = bootstrap_params["ratings"]  # [B, n_competitors] unscaled
+            scaled_samples = scale(bootstrap_ratings)
+
+            rating_lower = jnp.quantile(scaled_samples, significance_level / 2.0, axis=0)
+            rating_upper = jnp.quantile(scaled_samples, 1.0 - significance_level / 2.0, axis=0)
+            scaled_variances = jnp.var(scaled_samples, axis=0)
+
+        else:
+            raise ValueError(f"Unknown ci_method: {ci_method}")
 
         return {
             "competitors": dataset.competitors,
             "ratings": scaled_ratings,
             "coeffs": coeffs,
-            "rating_lower": scaled_ratings - scaled_widths,
-            "rating_upper": scaled_ratings + scaled_widths,
+            "rating_lower": rating_lower,
+            "rating_upper": rating_upper,
             "variances": scaled_variances,
         }
