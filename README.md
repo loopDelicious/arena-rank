@@ -1,5 +1,15 @@
-# arena-ai
-Open source rating systems in jax powering the LMArena leaderboard.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="arena/assets/logo-dark.png">
+    <img alt="arena" src="arena/assets/logo.png" width=30%>
+  </picture>
+</p>
+
+<h3 align="center">
+Arena-AI: The ranking methodology powering the LMArena leaderboard.
+</h3>
+
+
 
 ## Installation
 From pip:
@@ -12,7 +22,7 @@ uv sync
 ```
 
 ## Examples
-The minimal example of using `arena` to produce a leaderboard on LMArena data can be run in only a few lines:
+Below is a minimal example using `arena` to produce a leaderboard on LMArena data:
 ```python
 import pandas as pd
 import datasets
@@ -29,7 +39,9 @@ model = BradleyTerry(n_competitors=len(dataset.competitors))
 
 # compute ratings and 95% confidence intervals
 results = model.compute_ratings_and_cis(dataset, significance_level=0.05)
-
+```
+We visualize the top 10 models on the leaderboard:
+```python
 # print top 10 competitors with ratings and confidence intervals
 leaderboard = pd.DataFrame(results).sort_values("ratings", ascending=False).head(10)
 print(leaderboard.to_markdown(index=False))
@@ -49,9 +61,8 @@ print(leaderboard.to_markdown(index=False))
 | llama-4-maverick-03-26-experimental |   1067.21 |        1059.38 |        1075.04 |    15.953   |
 | gemini-2.5-flash                    |   1061.26 |        1055.31 |        1067.22 |    9.21695  |
 ```
-(Note that this ranking is with a subset of publicly released data from July, and without style control so it's not reflective of the live leaderboard.)
 
-There are more advanced example notebooks in the [examples](examples/) folder covering techniques such as the style control leaderboard on [LMArena](examples/lmarena.ipynb), analysis of voter patterns on the [PRISM](examples/prism.ipynb) dataset, and analysis of sports and video game competitions using the general Bradley-Terry methodology in [nba.ipynb](examples/nba.ipynb) and [melee.ipynb](examples/melee.ipynb).
+See the [examples](examples/) folder for notebooks with more advanced examples, covering techniques such as the style-controlled leaderboard on [LMArena](examples/lmarena.ipynb), analysis of voter patterns on the [PRISM](examples/prism.ipynb) dataset, and analysis of [sports](examples/nba.ipynb) and [video game competitions](examples/melee.ipynb) using the Bradley-Terry methodology.
 
 ## Contributing
 We welcome and encourage contributions. To develop `arena` make sure to install the development dependencies and the git pre-commit hooks.
