@@ -9,6 +9,9 @@
 Arena-AI: The ranking methodology powering the LMArena leaderboard.
 </h3>
 
+<p align="center">
+| <a href="https://lmarena.ai"><b>LMArena</b></a> | <a href="https://news.lmarena.ai"><b>Blog</b></a> | <a href="https://x.com/arena"><b>X</b></a> | <a href="https://discord.com/invite/LMArena"><b>Discord</b></a> |
+</p>
 
 
 ## Installation
