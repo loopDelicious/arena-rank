@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "arena-rank"
 version = "0.0.1"
-description = "The ranking methodology powering the LMArena leaderboard."
+description = "Ranking methodology powering the LMArena leaderboard."
 readme = "README.md"
 license = {text = "Apache 2.0"}
 requires-python = ">=3.11"
