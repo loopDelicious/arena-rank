@@ -145,7 +145,7 @@ class BradleyTerry(RatingSystem):
         Args:
             dataset: PairDataset containing the matchup data.
             significance_level: Significance level for confidence intervals.
-            ci_method: "sandwich" for asymptotic estimates or "bootstrap" for resampling.
+            ci_method: "sandwich" for central limit theorem estimates or "bootstrap" for resampling.
             num_bootstrap: Number of bootstrap samples (only used if ci_method="bootstrap").
             seed: Random seed for bootstrapping.
             n_jobs: Number of workers for multiprocessing (only used if ci_method="bootstrap").
