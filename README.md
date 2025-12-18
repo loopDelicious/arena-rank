@@ -16,21 +16,21 @@ Arena: The ranking methodology powering the LMArena leaderboard.
 
 ## Installation
 From pip:
-`pip install arena-ai`
+`pip install arena-rank`
 
 From source:
 ```
-git clone https://github.com/lmarena/arena-ai && cd arena-ai
+git clone https://github.com/lmarena/arena-rank && cd arena-rank
 uv sync
 ```
 
 ## Examples
-Below is a minimal example using `arena` to produce a leaderboard on LMArena data:
+Below is a minimal example using Arena-Rank to produce a leaderboard on LMArena data:
 ```python
 import pandas as pd
 import datasets
-from arena.utils.data_utils import PairDataset
-from arena.models.bradley_terry import BradleyTerry
+from arena_rank.utils.data_utils import PairDataset
+from arena_rank.models.bradley_terry import BradleyTerry
 
 df = datasets.load_dataset(
     "lmarena-ai/arena-human-preference-140k",

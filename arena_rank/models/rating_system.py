@@ -4,8 +4,8 @@ from abc import ABC, abstractmethod
 from functools import partial
 from jaxtyping import PyTree
 
-from arena.utils.data_utils import BasePairDataset
-from arena.utils.math_utils import lbfgs_minimize
+from arena_rank.utils.data_utils import BasePairDataset
+from arena_rank.utils.math_utils import lbfgs_minimize
 
 
 class RatingSystem(ABC):

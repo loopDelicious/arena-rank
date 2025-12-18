@@ -48,11 +48,11 @@ examples = [
 
 [project.urls]
 Homepage = "https://lmarena.ai"
-Repository = "https://github.com/lmarena/arena-ai"
-Issues = "https://github.com/lmarena/arena-ai/issues"
+Repository = "https://github.com/lmarena/arena-rank"
+Issues = "https://github.com/lmarena/arena-rank/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["arena"]
+packages = ["arena_rank"]
 
 [tool.ruff]
 line-length = 120

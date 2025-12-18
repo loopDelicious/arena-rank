@@ -2,7 +2,7 @@ import pytest
 import pandas as pd
 import numpy as np
 import jax.numpy as jnp
-from arena.utils.data_utils import get_matchups_and_competitors, PairDataset
+from arena_rank.utils.data_utils import get_matchups_and_competitors, PairDataset
 
 
 def test_get_matchups_and_competitors() -> None:
