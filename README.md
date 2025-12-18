@@ -1,12 +1,12 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="arena/assets/logo-dark.png">
-    <img alt="arena" src="arena/assets/logo.png" width=30%>
+    <source media="(prefers-color-scheme: dark)" srcset="arena_rank/assets/logo-dark.png">
+    <img alt="LMArena logo" src="arena_rank/assets/logo.png" width=30%>
   </picture>
 </p>
 
 <h3 align="center">
-Arena: The ranking methodology powering the LMArena leaderboard.
+Arena-Rank: The ranking methodology powering the LMArena leaderboard.
 </h3>
 
 <p align="center">
@@ -68,7 +68,7 @@ print(leaderboard.to_markdown(index=False))
 See the [examples](examples/) folder for notebooks with more advanced examples, covering techniques such as the style-controlled leaderboard on [LMArena](examples/lmarena.ipynb), analysis of voter patterns on the [PRISM](examples/prism.ipynb) dataset, and analysis of [sports](examples/nba.ipynb) and [video game competitions](examples/melee.ipynb) using the Bradley-Terry methodology.
 
 ## Contributing
-We welcome and encourage contributions. To develop `arena` make sure to install the development dependencies and the git pre-commit hooks.
+We welcome and encourage contributions. To develop Arena-Rank, make sure to install the development dependencies and the git pre-commit hooks.
 
 ```
 uv sync --group dev
